@@ -1,0 +1,51 @@
+name: Convert incoming legal PDFs
+
+on:
+  # automatic when you push PDFs into the drop folders
+  push:
+    paths:
+      - "incoming/**/*.pdf"
+      - "incoming/**/*.PDF"
+  # also allow manual run
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  convert:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install markitdown
+        run: |
+          python -m pip install --upgrade pip
+          pip install "markitdown[pdf]"
+
+      - name: Convert PDFs → Markdown
+        run: python scripts/convert_incoming_pdfs.py
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # stage both the new markdown and the deleted source PDFs
+          git add content/ incoming/ || true
+
+          if git diff --staged --quiet; then
+            echo "No content changes"
+          else
+            git commit -m "chore: convert incoming legal PDFs to Markdown $(date -u +%Y-%m-%d)"
+            git pull --rebase origin main
+            git push
+          fi
