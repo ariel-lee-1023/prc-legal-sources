@@ -13,7 +13,6 @@ Usage:
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -32,36 +31,79 @@ ATTACHMENTS_DIR = REPO_ROOT / "attachments"
 MANIFEST_PATH = REPO_ROOT / "sources" / ".sync-manifest.json"
 
 
-def get_headers() -> dict[str, str]:
-    api_key = os.environ.get("BIJI_API_KEY")
-    client_id = os.environ.get("BIJI_CLIENT_ID")
-    if not api_key or not client_id:
-        print("ERROR: BIJI_API_KEY and BIJI_CLIENT_ID must be set", file=sys.stderr)
+def get_api_key() -> str:
+    key = os.environ.get("BIJI_API_KEY", "").strip()
+    if not key:
+        print("ERROR: BIJI_API_KEY is empty or not set", file=sys.stderr)
         sys.exit(1)
+    return key
+
+
+def get_client_id() -> str:
+    cid = os.environ.get("BIJI_CLIENT_ID", "").strip()
+    if not cid:
+        print("ERROR: BIJI_CLIENT_ID is empty or not set", file=sys.stderr)
+        sys.exit(1)
+    return cid
+
+
+def make_headers(use_bearer: bool = False) -> dict[str, str]:
+    api_key = get_api_key()
+    client_id = get_client_id()
+    auth_value = f"Bearer {api_key}" if use_bearer else api_key
     return {
-        "Authorization": api_key,
+        "Authorization": auth_value,
         "X-Client-ID": client_id,
         "User-Agent": "prc-legal-sources-sync/1.0",
+        "Accept": "application/json",
     }
 
 
 def api_get(path: str, params: dict[str, Any] | None = None) -> dict:
     url = f"{BASE_URL}{path}"
-    resp = requests.get(url, headers=get_headers(), params=params, timeout=60)
-    resp.raise_for_status()
-    data = resp.json()
-    if not data.get("success", True):
-        raise RuntimeError(f"API error: {data}")
-    return data.get("data", data)
+    last_error = None
+
+    # Try both auth styles: plain key and Bearer prefix
+    for use_bearer in (False, True):
+        headers = make_headers(use_bearer=use_bearer)
+        style = "Bearer" if use_bearer else "plain"
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=60)
+            if resp.status_code == 401:
+                print(f"  [auth={style}] 401 Unauthorized. Response body: {resp.text[:500]}", file=sys.stderr)
+                last_error = resp
+                continue
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("success", True):
+                raise RuntimeError(f"API error: {data}")
+            print(f"  [auth={style}] OK")
+            return data.get("data", data)
+        except requests.exceptions.HTTPError as e:
+            last_error = e.response if hasattr(e, "response") else None
+            print(f"  [auth={style}] HTTP error: {e}", file=sys.stderr)
+            if last_error is not None:
+                print(f"  Response body: {last_error.text[:500]}", file=sys.stderr)
+
+    # Both styles failed
+    print("\nBoth auth styles failed. Please double-check:", file=sys.stderr)
+    print("  1. BIJI_API_KEY is the full key (usually starts with gk_)", file=sys.stderr)
+    print("  2. BIJI_CLIENT_ID is the full client id (usually starts with cli_)", file=sys.stderr)
+    print("  3. The API Key is associated with '内置完整权限'", file=sys.stderr)
+    print("  4. The knowledge base LYw7MjpY is owned by or subscribed under this account", file=sys.stderr)
+    if last_error is not None:
+        raise requests.exceptions.HTTPError(
+            f"401 Unauthorized after trying both auth styles. Last body: {last_error.text[:300]}",
+            response=last_error,
+        )
+    raise RuntimeError("All auth attempts failed")
 
 
 def slugify(title: str, note_id: str) -> str:
-    # Keep Chinese + alphanumeric, collapse spaces
     cleaned = re.sub(r"[^\w\u4e00-\u9fff\-]+", "-", title.strip())
     cleaned = re.sub(r"-+", "-", cleaned).strip("-")
     if not cleaned:
         cleaned = "untitled"
-    # Limit length and always append short id for uniqueness
     short_id = note_id[-8:] if len(note_id) > 8 else note_id
     return f"{cleaned[:80]}-{short_id}"
 
@@ -78,7 +120,7 @@ def fetch_all_notes() -> list[dict]:
         if not data.get("has_more", False):
             break
         page += 1
-        if page > 100:  # safety
+        if page > 100:
             break
     return notes
 
@@ -92,7 +134,8 @@ def download_attachment(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if dest.exists():
         return
-    r = requests.get(url, headers=get_headers(), timeout=120, stream=True)
+    # Prefer plain key for downloads (same as successful list)
+    r = requests.get(url, headers=make_headers(use_bearer=False), timeout=120, stream=True)
     r.raise_for_status()
     with open(dest, "wb") as f:
         for chunk in r.iter_content(chunk_size=8192):
@@ -109,7 +152,6 @@ def write_note(note: dict, detail: dict) -> str:
     md_path = NOTES_DIR / f"{slug}.md"
     NOTES_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Front matter
     front = [
         "---",
         f"note_id: {note_id}",
@@ -125,7 +167,6 @@ def write_note(note: dict, detail: dict) -> str:
         "",
     ]
 
-    # Attachments
     attachments = detail.get("attachments") or []
     if attachments:
         front.append("## Attachments\n")
@@ -149,6 +190,22 @@ def write_note(note: dict, detail: dict) -> str:
 
 def main() -> None:
     print(f"[{datetime.now(timezone.utc).isoformat()}] Starting sync for topic {TOPIC_ID}")
+    print(f"API Key length: {len(get_api_key())}, Client ID length: {len(get_client_id())}")
+
+    # First probe: list knowledge bases to verify credentials work at all
+    print("Probing credentials with /resource/knowledge/list ...")
+    try:
+        kb_data = api_get("/resource/knowledge/list", {"page": 1})
+        topics = kb_data.get("topics") or kb_data.get("list") or []
+        print(f"  Credentials OK. Found {len(topics)} knowledge base(s).")
+        for t in topics[:5]:
+            tid = t.get("topic_id") or t.get("id")
+            name = t.get("name") or ""
+            print(f"    - {tid}: {name}")
+    except Exception as e:
+        print(f"  Knowledge list probe failed: {e}", file=sys.stderr)
+        print("  Will still try the notes endpoint...", file=sys.stderr)
+
     notes = fetch_all_notes()
     print(f"Found {len(notes)} notes")
 
@@ -163,7 +220,6 @@ def main() -> None:
         except Exception as e:
             print(f"  ✗ note {note_id}: {e}", file=sys.stderr)
 
-    # Manifest for change detection
     manifest = {
         "topic_id": TOPIC_ID,
         "synced_at": datetime.now(timezone.utc).isoformat(),
