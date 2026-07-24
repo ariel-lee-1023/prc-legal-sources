@@ -1,55 +1,69 @@
 # PRC Legal Sources
 
-Authoritative legal sources of the People's Republic of China: current laws & regulations, judicial interpretations, and guiding cases / precedents.
+Authoritative legal sources of the People's Republic of China, organised by **legal effect hierarchy**.
 
 Provides accurate grounding for legal AI agents.
 
-## Source of Truth
+## Effect hierarchy (top → bottom)
 
-Primary collection lives in Get笔记 (biji.com) knowledge base:
+| Folder | Chinese | Nature |
+|--------|---------|--------|
+| `01_Constitution` | 宪法 | Supreme, unconditioned |
+| `02_Statutes` | 法律 | Enacted by NPC / NPCSC |
+| `03_Administrative_Regulations` | 行政法规 | Issued by State Council, subordinate to statutes |
+| `04_Local_Regulations` | 地方性法规 | Subordinate to above |
+| `05_Judicial_Interpretations` | 司法解释 | Distinct effect-tier, not legislation |
+| `06_Authoritative_Cases` | 指导性案例 / 权威案例 | Interpretive, not enacted |
 
-- Topic ID: `LYw7MjpY`
-- Title: 公益法律智库
-- URL: https://biji.com/topic/LYw7MjpY
+## How to use (drop-folder workflow)
 
-This repository is a versioned, searchable, git-backed mirror optimized for AI retrieval and citation.
+Same pattern as [LiuZhongjing-Thought](https://github.com/ariel-lee-1023/LiuZhongjing-Thought):
 
-## Sync Workflow
-
-See [`scripts/sync_from_biji.py`](scripts/sync_from_biji.py) and [`.github/workflows/sync-biji.yml`](.github/workflows/sync-biji.yml).
-
-### Credentials
-
-Required GitHub repository secrets:
-
-- `BIJI_API_KEY`
-- `BIJI_CLIENT_ID`
-
-Obtain them at: https://www.biji.com/openapi
-
-### Manual trigger
-
-```bash
-# after exporting the secrets locally
-python scripts/sync_from_biji.py
-```
-
-Or ask Grok: "Run the biji → prc-legal-sources sync"
-
-## Structure
+1. Download the PDFs (from biji.com or elsewhere).
+2. Upload them into the matching folder under `incoming/`:
 
 ```
-sources/
-  ├── laws/
-  ├── regulations/
-  ├── judicial-interpretations/
-  ├── guiding-cases/
-  └── notes/          # raw notes from the knowledge base (Markdown)
-attachments/          # images, PDFs, audio extracted from notes
-scripts/
-  └── sync_from_biji.py
+incoming/
+├── 01_Constitution/                 ← 宪法 PDFs
+├── 02_Statutes/                     ← 法律 PDFs
+├── 03_Administrative_Regulations/   ← 行政法规 PDFs
+├── 04_Local_Regulations/            ← 地方性法规 PDFs
+├── 05_Judicial_Interpretations/     ← 司法解释 PDFs
+└── 06_Authoritative_Cases/          ← 指导性案例 PDFs
 ```
+
+3. Push (or upload via the GitHub web UI).
+   The Action will automatically:
+   - convert every `*.pdf` with [MarkItDown](https://markitdown.tools/en)
+   - write the `.md` files into the corresponding place under `content/`
+   - delete the source PDF (keeps the repo light)
+   - commit & push the result
+
+You can also trigger it manually: **Actions → Convert incoming legal PDFs → Run workflow**.
+
+## Output layout
+
+```
+content/
+├── 01_Constitution/
+│   └── <original-name>.md
+├── 02_Statutes/
+│   └── <original-name>.md
+├── 03_Administrative_Regulations/
+│   └── <original-name>.md
+├── 04_Local_Regulations/
+│   └── <original-name>.md
+├── 05_Judicial_Interpretations/
+│   └── <original-name>.md
+└── 06_Authoritative_Cases/
+    └── <original-name>.md
+```
+
+## Notes
+
+- MarkItDown uses pdfminer (text extraction). Scanned / image-only PDFs may need OCR first.
+- The old 得到大脑 OpenAPI path is no longer the primary intake — the public API cannot see knowledge-base “文件” PDFs. Use this drop-folder workflow instead.
 
 ## License & Attribution
 
-Content originates from the 公益法律智库 knowledge base. Respect original licenses and attribution where present. This mirror exists for research and AI grounding purposes.
+Content originates from publicly available PRC legal texts. Respect original licenses and attribution where present. This mirror exists for research and AI grounding purposes.
