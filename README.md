@@ -60,7 +60,6 @@ content/
 ## Notes
 
 - MarkItDown uses pdfminer (text extraction). Scanned / image-only PDFs may need OCR first.
-- The old 得到大脑 OpenAPI path is no longer the primary intake — the public API cannot see knowledge-base “文件” PDFs. Use this drop-folder workflow instead.
 
 ## License & Attribution
 
