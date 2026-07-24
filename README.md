@@ -17,8 +17,6 @@ Provides accurate grounding for legal AI agents.
 
 ## How to use (drop-folder workflow)
 
-Same pattern as [LiuZhongjing-Thought](https://github.com/ariel-lee-1023/LiuZhongjing-Thought):
-
 1. Download the PDFs (from biji.com or elsewhere).
 2. Upload them into the matching folder under `incoming/`:
 
