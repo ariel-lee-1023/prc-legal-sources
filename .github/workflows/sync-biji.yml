@@ -1,0 +1,43 @@
+name: Sync from biji knowledge base
+
+on:
+  schedule:
+    # Every day at 02:00 UTC (10:00 CST)
+    - cron: "0 2 * * *"
+  workflow_dispatch:  # manual trigger from GitHub UI
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install requests
+
+      - name: Run sync
+        env:
+          BIJI_API_KEY: ${{ secrets.BIJI_API_KEY }}
+          BIJI_CLIENT_ID: ${{ secrets.BIJI_CLIENT_ID }}
+        run: python scripts/sync_from_biji.py
+
+      - name: Commit and push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add sources/ attachments/ || true
+          if git diff --staged --quiet; then
+            echo "No changes"
+          else
+            git commit -m "chore: sync from biji topic LYw7MjpY $(date -u +%Y-%m-%d)"
+            git push
+          fi
