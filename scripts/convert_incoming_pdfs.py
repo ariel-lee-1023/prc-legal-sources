@@ -70,11 +70,13 @@ _PAGE_NUM_RE = re.compile(
 )
 # article / section start — do not soft-join across these
 _STRUCT_START = re.compile(
-    r"^(第[一二三四五六七八九十百千零〇\d]+[编章节条分]"
+    r"^(第[一二三四五六七八九十百千零〇\d]+[编章节条分节]"
     r"|[（(][一二三四五六七八九十\d]+[)）]"
     r"|\d+[、.]\s"
-    r"|附\s*则)"
+    r"|附\s*则"
+    r"|[一二三四五六七八九十]+、)"
 )
+_SENT_END = set("。！？；：”』」）】》…")
 
 
 def safe_name(name: str) -> str:
@@ -92,8 +94,15 @@ def cjk_count(text: str) -> int:
 
 
 def join_soft_wraps(text: str) -> str:
-    """Re-join lines broken by PDF justified layout mid-sentence."""
-    lines = text.split("\n")
+    """Re-join lines broken by PDF justified layout mid-sentence.
+
+    Handles both single newlines and blank-line gaps that pdf extractors
+    insert between consecutive visual lines of the same paragraph.
+    """
+    raw_lines = text.split("\n")
+    # first pass: drop pure page-number / header residue already partially cleaned
+    lines = [ln.rstrip() for ln in raw_lines]
+
     out: list[str] = []
     buf = ""
 
@@ -103,35 +112,58 @@ def join_soft_wraps(text: str) -> str:
             out.append(buf)
             buf = ""
 
-    for raw in lines:
-        line = raw.rstrip()
-        stripped = line.strip()
+    i = 0
+    n = len(lines)
+    while i < n:
+        stripped = lines[i].strip()
+
         if not stripped:
+            # peek: if next non-empty continues current sentence, skip blank
+            j = i + 1
+            while j < n and not lines[j].strip():
+                j += 1
+            if buf and j < n:
+                nxt = lines[j].strip()
+                if (
+                    buf[-1] not in _SENT_END
+                    and not _STRUCT_START.match(nxt)
+                    and not _PAGE_NUM_RE.match(nxt)
+                ):
+                    i += 1
+                    continue
             flush()
-            out.append("")
+            # keep at most one blank as paragraph separator
+            if out and out[-1] != "":
+                out.append("")
+            i += 1
             continue
 
-        # structural headings / list items start a new paragraph
+        if _PAGE_NUM_RE.match(stripped) or _HEADER_RE.match(stripped):
+            i += 1
+            continue
+
         if _STRUCT_START.match(stripped):
             flush()
             buf = stripped
+            i += 1
             continue
 
         if not buf:
             buf = stripped
+            i += 1
             continue
 
-        # end of previous looks like sentence end → new line
-        if buf[-1] in "。！？；：”』」）】》…":
+        if buf[-1] in _SENT_END:
             flush()
             buf = stripped
+            i += 1
             continue
 
-        # otherwise soft-wrap: glue without space (Chinese)
+        # soft-wrap glue (Chinese needs no interstitial space)
         buf = buf + stripped
+        i += 1
 
     flush()
-    # collapse excess blank lines
     result = re.sub(r"\n{3,}", "\n\n", "\n".join(out))
     return result.strip()
 
@@ -159,7 +191,9 @@ def _blocks_to_columns(page) -> str:
             continue
         if b[5] != 0:  # not a text block
             continue
-        text_blocks.append((x0, y0, x1, y1, txt.strip()))
+        # keep internal newlines from block as single spaces for later join
+        cleaned = re.sub(r"\s*\n\s*", "", txt.strip())
+        text_blocks.append((x0, y0, x1, y1, cleaned))
 
     if not text_blocks:
         return ""
@@ -170,19 +204,17 @@ def _blocks_to_columns(page) -> str:
     left = [b for b in text_blocks if (b[0] + b[2]) / 2 < mid]
     right = [b for b in text_blocks if (b[0] + b[2]) / 2 >= mid]
 
-    # only treat as dual-column when both sides have meaningful content
     left_cjk = sum(cjk_count(b[4]) for b in left)
     right_cjk = sum(cjk_count(b[4]) for b in right)
     dual = left_cjk >= MIN_CJK_PAGE and right_cjk >= MIN_CJK_PAGE
 
     if dual:
-        left.sort(key=lambda b: (b[1], b[0]))
-        right.sort(key=lambda b: (b[1], b[0]))
+        left.sort(key=lambda b: (round(b[1], 1), b[0]))
+        right.sort(key=lambda b: (round(b[1], 1), b[0]))
         parts = [b[4] for b in left] + [""] + [b[4] for b in right]
         return "\n".join(parts)
 
-    # single column: reading order by y then x
-    text_blocks.sort(key=lambda b: (b[1], b[0]))
+    text_blocks.sort(key=lambda b: (round(b[1], 1), b[0]))
     return "\n".join(b[4] for b in text_blocks)
 
 
@@ -244,7 +276,7 @@ def _ocr_clip_tesseract(page, clip, dpi: int, tmpdir: Path) -> str:
         "-l",
         OCR_LANG,
         "--psm",
-        "6",  # assume a uniform block of text
+        "6",  # uniform block of text (one column)
         "-c",
         "preserve_interword_spaces=1",
     ]
@@ -260,7 +292,6 @@ def ocr_page_two_column(page, dpi: int = OCR_DPI) -> str:
     import fitz
 
     w, h = float(page.rect.width), float(page.rect.height)
-    # slight overlap so text near the gutter is not cut
     left_clip = fitz.Rect(0, 0, w * 0.52, h)
     right_clip = fitz.Rect(w * 0.48, 0, w, h)
 
@@ -298,7 +329,6 @@ def extract_with_ocr(pdf_path: Path) -> tuple[str | None, str]:
         n = doc.page_count
         print(f"  OCR pages={n} dpi={OCR_DPI} lang={OCR_LANG}")
         for i, page in enumerate(doc):
-            # Prefer two-column split for typical 公报 portrait pages
             t = ocr_page_two_column(page)
             if cjk_count(t) < MIN_CJK_PAGE:
                 t2 = ocr_page_full(page)
