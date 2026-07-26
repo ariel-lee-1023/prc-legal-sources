@@ -14,8 +14,12 @@ Provides accurate grounding for legal AI agents.
 | `02_Statutes` | 法律 | Enacted by NPC / NPCSC |
 | `03_Administrative_Regulations` | 行政法规 | Issued by State Council, subordinate to statutes |
 | `04_Local_Regulations` | 地方性法规 | Subordinate to above |
-| `05_Judicial_Interpretations` | 司法解释 | Distinct effect-tier, not legislation |
-| `06_Authoritative_Cases` | 指导性案例 / 权威案例 | Interpretive, not enacted |
+| `05_Rules` | 规章 | Departmental / local government rules |
+| `06_Judicial_Interpretations` | 司法解释 | Distinct effect-tier, not legislation |
+| `07_Authoritative_Cases` | 指导性案例 / 权威案例 | Interpretive, not enacted |
+| `08_Judicial_Guidance_Documents` | 司法指导性文件 | Court guidance documents |
+| `09_Local_Judicial_Guidance` | 地方司法指导文件 | Local court guidance |
+| `10_Other_Authoritative_Materials` | 其他权威材料 | Other authoritative materials |
 
 ## How to use (drop-folder workflow)
 
@@ -24,12 +28,16 @@ Provides accurate grounding for legal AI agents.
 
 ```
 incoming/
-├── 01_Constitution/                 ← 宪法 PDFs
-├── 02_Statutes/                     ← 法律 PDFs
-├── 03_Administrative_Regulations/   ← 行政法规 PDFs
-├── 04_Local_Regulations/            ← 地方性法规 PDFs
-├── 05_Judicial_Interpretations/     ← 司法解释 PDFs
-└── 06_Authoritative_Cases/          ← 指导性案例 PDFs
+├── 01_Constitution/                 ← 宪法
+├── 02_Statutes/                     ← 法律
+├── 03_Administrative_Regulations/   ← 行政法规
+├── 04_Local_Regulations/            ← 地方性法规
+├── 05_Rules/                        ← 规章
+├── 06_Judicial_Interpretations/     ← 司法解释
+├── 07_Authoritative_Cases/          ← 指导性案例 / 权威案例
+├── 08_Judicial_Guidance_Documents/  ← 司法指导性文件
+├── 09_Local_Judicial_Guidance/      ← 地方司法指导文件
+└── 10_Other_Authoritative_Materials/← 其他权威材料
 ```
 
 3. Push (or upload via the GitHub web UI).
@@ -46,17 +54,15 @@ You can also trigger it manually: **Actions → Convert incoming legal PDFs → 
 ```
 content/
 ├── 01_Constitution/
-│   └── <original-name>.md
 ├── 02_Statutes/
-│   └── <original-name>.md
 ├── 03_Administrative_Regulations/
-│   └── <original-name>.md
 ├── 04_Local_Regulations/
-│   └── <original-name>.md
-├── 05_Judicial_Interpretations/
-│   └── <original-name>.md
-└── 06_Authoritative_Cases/
-    └── <original-name>.md
+├── 05_Rules/
+├── 06_Judicial_Interpretations/
+├── 07_Authoritative_Cases/
+├── 08_Judicial_Guidance_Documents/
+├── 09_Local_Judicial_Guidance/
+└── 10_Other_Authoritative_Materials/
 ```
 
 ## Notes
