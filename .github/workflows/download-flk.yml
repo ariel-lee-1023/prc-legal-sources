@@ -2,18 +2,18 @@ name: Download + convert from flk.npc.gov.cn
 
 on:
   schedule:
-    # Every Sunday 02:00 UTC = 10:00 CST
-    - cron: "0 2 * * 0"
+    # Intensive phase: every 6 hours until 02_Statutes is largely filled
+    - cron: "0 */6 * * *"
   workflow_dispatch:
     inputs:
       types:
-        description: "Comma-separated Chinese types (default 01+02+03+05)"
+        description: "Comma-separated Chinese types (default: 法律 only)"
         required: false
-        default: "宪法,法律,行政法规,司法解释"
+        default: "法律"
       max_new:
-        description: "Max new PDFs to download this run"
+        description: "Max new PDFs this run (keep small)"
         required: false
-        default: "40"
+        default: "12"
 
 permissions:
   contents: write
@@ -39,13 +39,14 @@ jobs:
 
       - name: Download new laws (PDF → incoming/)
         run: |
-          TYPES="${{ github.event.inputs.types || '宪法,法律,行政法规,司法解释' }}"
-          MAX_NEW="${{ github.event.inputs.max_new || '40' }}"
+          TYPES="${{ github.event.inputs.types || '法律' }}"
+          MAX_NEW="${{ github.event.inputs.max_new || '12' }}"
           echo "types=$TYPES  max_new=$MAX_NEW"
           python scripts/download_flk.py \
             --types "$TYPES" \
             --max-new "$MAX_NEW" \
-            --max-pages 15 \
+            --max-pages 20 \
+            --size 30 \
             --sleep 1.5
 
       - name: Convert PDFs → Markdown (and delete sources)
@@ -61,7 +62,7 @@ jobs:
           if git diff --staged --quiet; then
             echo "No content changes"
           else
-            git commit -m "chore: flk weekly sync + convert $(date -u +%Y-%m-%d)"
+            git commit -m "chore: flk batch (法律) + convert $(date -u +%Y-%m-%dT%H:%M)"
             git pull --rebase origin main
             git push
           fi
