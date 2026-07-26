@@ -42,12 +42,25 @@ incoming/
 
 3. Push (or upload via the GitHub web UI).
    The Action will automatically:
-   - convert every `*.pdf` with [MarkItDown](https://markitdown.tools/en)
+   - convert every `*.pdf` (text-layer → Chinese OCR → markitdown fallback)
+   - handle dual-column 公报 layout and soft line-wraps
    - write the `.md` files into the corresponding place under `content/`
    - delete the source PDF (keeps the repo light)
    - commit & push the result
 
 You can also trigger it manually: **Actions → Convert incoming legal PDFs → Run workflow**.
+
+## Conversion pipeline
+
+| Stage | Engine | Handles |
+|-------|--------|---------|
+| 1 | PyMuPDF text layer + dual-column reorder | Official text PDFs |
+| 2 | Tesseract `chi_sim` OCR (left→right column split) | Scanned 公报 / image-only PDFs |
+| 3 | MarkItDown / pdfminer | Last-resort fallback |
+
+Post-process: fullwidth→halfwidth digits, strip running headers/page numbers, join mid-sentence soft wraps.
+
+**Note:** OCR is slower (roughly 5–15 s/page). Prefer official text-layer PDFs when available.
 
 ## Output layout
 
@@ -64,10 +77,6 @@ content/
 ├── 09_Local_Judicial_Guidance/
 └── 10_Other_Authoritative_Materials/
 ```
-
-## Notes
-
-- MarkItDown uses pdfminer (text extraction). Scanned / image-only PDFs may need OCR first.
 
 ## License & Attribution
 
