@@ -168,10 +168,13 @@ def cleanup_text(text: str) -> str:
 
 
 def _blocks_to_columns(page) -> str:
-    """Extract blocks; if two clear x-clusters, read left then right.
+    """Extract blocks; dual-column only when layout is clearly two columns.
 
     PyMuPDF blocks tuple: (x0, y0, x1, y1, text, block_no, block_type)
     block_type 0 = text, 1 = image.
+
+    Guard: any full-width line (width > 60% of page) forces single-column
+    reading order, so official single-column statutes are never scrambled.
     """
     blocks = page.get_text("blocks", sort=True) or []
     text_blocks = []
@@ -192,14 +195,17 @@ def _blocks_to_columns(page) -> str:
         return ""
 
     page_w = float(page.rect.width)
-    mid = page_w / 2.0
 
-    left = [b for b in text_blocks if (b[0] + b[2]) / 2 < mid]
-    right = [b for b in text_blocks if (b[0] + b[2]) / 2 >= mid]
+    # Full-width lines ⇒ single column (official statute layout)
+    if any((b[2] - b[0]) > page_w * 0.60 for b in text_blocks):
+        text_blocks.sort(key=lambda b: (round(b[1], 1), b[0]))
+        return "\n".join(b[4] for b in text_blocks)
 
+    # True dual-column: blocks wholly on left vs wholly on right of gutter
+    left = [b for b in text_blocks if b[2] < page_w * 0.52]
+    right = [b for b in text_blocks if b[0] > page_w * 0.48]
     left_cjk = sum(cjk_count(b[4]) for b in left)
     right_cjk = sum(cjk_count(b[4]) for b in right)
-    # require both sides substantial AND roughly balanced (avoid title-centering FPs)
     dual = (
         left_cjk >= MIN_CJK_PAGE
         and right_cjk >= MIN_CJK_PAGE
