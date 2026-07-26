@@ -3,7 +3,7 @@
 Convert PDFs dropped into incoming/ into Markdown under content/.
 
 Extraction strategy (per page):
-  1. Text layer present  → PyMuPDF, dual-column aware when needed
+  1. Text layer present  → PyMuPDF, dual-column aware (公报 left→right)
   2. Image-only / scanned → Tesseract Chinese OCR (chi_sim), two-column split
   3. Fallback            → markitdown/pdfminer
 
@@ -70,9 +70,11 @@ _STRUCT_START = re.compile(
     r"|[（(][一二三四五六七八九十\d]+[)）]"
     r"|\d+[、.]\s"
     r"|附\s*则"
-    r"|[一二三四五六七八九十]+、)"
+    r"|[一二三四五六七八九十]+、"
+    r"|目\s*录)"
 )
 _SENT_END = set("。！？；：”』」）】》…")
+_CJK_CHAR = re.compile(r"[\u4e00-\u9fff]")
 
 
 def safe_name(name: str) -> str:
@@ -90,11 +92,7 @@ def cjk_count(text: str) -> int:
 
 
 def join_soft_wraps(text: str) -> str:
-    """Re-join lines broken by PDF justified layout mid-sentence.
-
-    Handles both single newlines and blank-line gaps that extractors
-    insert between consecutive visual lines of the same paragraph.
-    """
+    """Re-join lines broken by PDF justified layout mid-sentence."""
     lines = [ln.rstrip() for ln in text.split("\n")]
     out: list[str] = []
     buf = ""
@@ -116,10 +114,13 @@ def join_soft_wraps(text: str) -> str:
                 j += 1
             if buf and j < n:
                 nxt = lines[j].strip()
+                # soft-join across blank when mid-sentence CJK run continues
                 if (
                     buf[-1] not in _SENT_END
                     and not _STRUCT_START.match(nxt)
                     and not _PAGE_NUM_RE.match(nxt)
+                    and _CJK_CHAR.search(buf[-1])
+                    and _CJK_CHAR.match(nxt[:1] or "")
                 ):
                     i += 1
                     continue
@@ -150,6 +151,17 @@ def join_soft_wraps(text: str) -> str:
             i += 1
             continue
 
+        # short non-sentence buffer that does not end with CJK → title, don't glue
+        if (
+            len(buf) <= 18
+            and not any(c in buf for c in "。；，")
+            and not _CJK_CHAR.search(buf[-1])
+        ):
+            flush()
+            buf = stripped
+            i += 1
+            continue
+
         buf = buf + stripped
         i += 1
 
@@ -168,16 +180,16 @@ def cleanup_text(text: str) -> str:
 
 
 def _blocks_to_columns(page) -> str:
-    """Extract blocks; dual-column only when layout is clearly two columns.
+    """Extract blocks with 公报 dual-column reading order.
 
-    PyMuPDF blocks tuple: (x0, y0, x1, y1, text, block_no, block_type)
-    block_type 0 = text, 1 = image.
+    PyMuPDF blocks: (x0, y0, x1, y1, text, block_no, block_type)
+    block_type 0 = text.
 
-    Guard: any full-width line (width > 60% of page) forces single-column
-    reading order, so official single-column statutes are never scrambled.
+    Gazette layout: full-width headers first, then entire left column
+    top→bottom, then entire right column top→bottom.
     """
     blocks = page.get_text("blocks", sort=True) or []
-    text_blocks = []
+    items: list[tuple] = []
     for b in blocks:
         if len(b) < 7:
             continue
@@ -189,37 +201,75 @@ def _blocks_to_columns(page) -> str:
         if not (txt or "").strip():
             continue
         cleaned = re.sub(r"\s*\n\s*", "", txt.strip())
-        text_blocks.append((x0, y0, x1, y1, cleaned))
+        items.append((x0, y0, x1, y1, cleaned))
 
-    if not text_blocks:
+    if not items:
         return ""
 
     page_w = float(page.rect.width)
+    mid = page_w / 2.0
+    key = lambda b: (round(b[1], 1), b[0])
 
-    # Full-width lines ⇒ single column (official statute layout)
-    if any((b[2] - b[0]) > page_w * 0.60 for b in text_blocks):
-        text_blocks.sort(key=lambda b: (round(b[1], 1), b[0]))
-        return "\n".join(b[4] for b in text_blocks)
+    left: list = []
+    right: list = []
+    spanning: list = []
+    for x0, y0, x1, y1, t in items:
+        w = x1 - x0
+        if x1 <= mid + 8 and w < page_w * 0.50:
+            left.append((x0, y0, x1, y1, t))
+        elif x0 >= mid - 8 and w < page_w * 0.50:
+            right.append((x0, y0, x1, y1, t))
+        else:
+            spanning.append((x0, y0, x1, y1, t))
 
-    # True dual-column: blocks wholly on left vs wholly on right of gutter
-    left = [b for b in text_blocks if b[2] < page_w * 0.52]
-    right = [b for b in text_blocks if b[0] > page_w * 0.48]
-    left_cjk = sum(cjk_count(b[4]) for b in left)
-    right_cjk = sum(cjk_count(b[4]) for b in right)
+    def is_running(t: str) -> bool:
+        return bool(_HEADER_RE.search(t)) or bool(_PAGE_NUM_RE.match(t.strip()))
+
+    body_left = [b for b in left if not is_running(b[4])]
+    body_right = [b for b in right if not is_running(b[4])]
+    lc = sum(cjk_count(b[4]) for b in body_left)
+    rc = sum(cjk_count(b[4]) for b in body_right)
     dual = (
-        left_cjk >= MIN_CJK_PAGE
-        and right_cjk >= MIN_CJK_PAGE
-        and min(left_cjk, right_cjk) / max(left_cjk, right_cjk) > 0.25
+        lc >= MIN_CJK_PAGE
+        and rc >= MIN_CJK_PAGE
+        and min(lc, rc) / max(lc, rc) > 0.12
     )
 
-    if dual:
-        left.sort(key=lambda b: (round(b[1], 1), b[0]))
-        right.sort(key=lambda b: (round(b[1], 1), b[0]))
-        parts = [b[4] for b in left] + [""] + [b[4] for b in right]
-        return "\n".join(parts)
+    if not dual:
+        return "\n".join(b[4] for b in sorted(items, key=key))
 
-    text_blocks.sort(key=lambda b: (round(b[1], 1), b[0]))
-    return "\n".join(b[4] for b in text_blocks)
+    # dual_top: earliest y where left & right column body coexist nearby
+    dual_top = None
+    for lb in body_left:
+        for rb in body_right:
+            if abs(lb[1] - rb[1]) < 50:
+                y = min(lb[1], rb[1])
+                dual_top = y if dual_top is None else min(dual_top, y)
+    if dual_top is None:
+        dual_top = min(b[1] for b in body_left + body_right)
+
+    top: list = []
+    col_l: list = []
+    col_r: list = []
+    for b in items:
+        x0, y0, x1, y1, t = b
+        w = x1 - x0
+        if y0 < dual_top - 2:
+            top.append(b)
+        elif x1 <= mid + 8 and w < page_w * 0.50:
+            col_l.append(b)
+        elif x0 >= mid - 8 and w < page_w * 0.50:
+            col_r.append(b)
+        else:
+            top.append(b)
+
+    parts = (
+        [b[4] for b in sorted(top, key=key)]
+        + [b[4] for b in sorted(col_l, key=key)]
+        + [""]
+        + [b[4] for b in sorted(col_r, key=key)]
+    )
+    return "\n".join(parts)
 
 
 def extract_text_layer(pdf_path: Path) -> tuple[str | None, str]:
