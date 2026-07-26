@@ -15,37 +15,9 @@ Provides accurate grounding for legal AI agents.
 | `05_Judicial_Interpretations` | 司法解释 | Distinct effect-tier, not legislation |
 | `06_Authoritative_Cases` | 指导性案例 / 权威案例 | Interpretive, not enacted |
 
-## Automatic download from 国家法律法规数据库
-
-No login required. Public APIs at `flk.npc.gov.cn`.
-
-- **Script**: `scripts/download_flk.py`
-- **Weekly Action**: every Sunday 02:00 UTC (10:00 CST) — downloads only *new* PDFs (manifest-tracked), converts them, deletes the PDFs, commits Markdown.
-- Default types: 宪法 + 法律 + 行政法规 + 司法解释 (local regulations deliberately omitted — too large).
-
-### First-time / local seed (recommended)
-
-```bash
-# Install once
-pip install requests "markitdown[pdf]"
-
-# Dry-run
-python scripts/download_flk.py --types 宪法,法律 --dry-run
-
-# Real download (start small)
-python scripts/download_flk.py --types 宪法,法律 --max-new 20 --max-pages 10
-
-# Then convert
-python scripts/convert_incoming_pdfs.py
-```
-
-After the first local seed the weekly Action only needs to touch the newest pages and exits early on known ids.
-
-Manual trigger: **Actions → Download + convert from flk.npc.gov.cn → Run workflow** (you can override types / max-new).
-
 ## How to use (drop-folder workflow)
 
-1. Download the PDFs (from flk, biji.com or elsewhere).
+1. Download the PDFs (from the official database or elsewhere).
 2. Upload them into the matching folder under `incoming/`:
 
 ```
@@ -88,8 +60,6 @@ content/
 ## Notes
 
 - MarkItDown uses pdfminer (text extraction). Scanned / image-only PDFs may need OCR first.
-- Manifest of downloaded ids lives at `sources/flk-manifest.json` (do not delete).
-- Local regulations (04) are not auto-downloaded by design; add them manually if needed.
 
 ## License & Attribution
 
