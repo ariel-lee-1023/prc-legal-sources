@@ -40,15 +40,12 @@ SUBFOLDERS = [
     "10_Other_Authoritative_Materials",
 ]
 
-# Minimum CJK chars on a page to treat text-layer extraction as successful
 MIN_CJK_PAGE = 8
 MIN_CJK_DOC = 30
 
-# OCR settings
 OCR_DPI = 280
 OCR_LANG = "chi_sim+eng"
 
-# Fullwidth ASCII → halfwidth (gazette PDFs often use fullwidth digits)
 _FW_TRANS = str.maketrans(
     {
         **{ord("０") + i: ord("0") + i for i in range(10)},
@@ -68,7 +65,6 @@ _PAGE_NUM_RE = re.compile(
     r"^\s*[—\-–]\s*[\d０-９]+\s*[—\-–]\s*$",
     re.MULTILINE,
 )
-# article / section start — do not soft-join across these
 _STRUCT_START = re.compile(
     r"^(第[一二三四五六七八九十百千零〇\d]+[编章节条分节]"
     r"|[（(][一二三四五六七八九十\d]+[)）]"
@@ -96,13 +92,10 @@ def cjk_count(text: str) -> int:
 def join_soft_wraps(text: str) -> str:
     """Re-join lines broken by PDF justified layout mid-sentence.
 
-    Handles both single newlines and blank-line gaps that pdf extractors
+    Handles both single newlines and blank-line gaps that extractors
     insert between consecutive visual lines of the same paragraph.
     """
-    raw_lines = text.split("\n")
-    # first pass: drop pure page-number / header residue already partially cleaned
-    lines = [ln.rstrip() for ln in raw_lines]
-
+    lines = [ln.rstrip() for ln in text.split("\n")]
     out: list[str] = []
     buf = ""
 
@@ -118,7 +111,6 @@ def join_soft_wraps(text: str) -> str:
         stripped = lines[i].strip()
 
         if not stripped:
-            # peek: if next non-empty continues current sentence, skip blank
             j = i + 1
             while j < n and not lines[j].strip():
                 j += 1
@@ -132,7 +124,6 @@ def join_soft_wraps(text: str) -> str:
                     i += 1
                     continue
             flush()
-            # keep at most one blank as paragraph separator
             if out and out[-1] != "":
                 out.append("")
             i += 1
@@ -159,7 +150,6 @@ def join_soft_wraps(text: str) -> str:
             i += 1
             continue
 
-        # soft-wrap glue (Chinese needs no interstitial space)
         buf = buf + stripped
         i += 1
 
@@ -177,21 +167,24 @@ def cleanup_text(text: str) -> str:
     return text.strip()
 
 
-# ── text-layer extraction (dual-column aware) ───────────────────────────
-
 def _blocks_to_columns(page) -> str:
-    """Extract blocks; if two clear x-clusters, read left then right."""
+    """Extract blocks; if two clear x-clusters, read left then right.
+
+    PyMuPDF blocks tuple: (x0, y0, x1, y1, text, block_no, block_type)
+    block_type 0 = text, 1 = image.
+    """
     blocks = page.get_text("blocks", sort=True) or []
     text_blocks = []
     for b in blocks:
-        if len(b) < 5:
+        if len(b) < 7:
             continue
-        x0, y0, x1, y1, txt = b[0], b[1], b[2], b[3], b[4]
+        x0, y0, x1, y1, txt, _bno, btype = (
+            b[0], b[1], b[2], b[3], b[4], b[5], b[6]
+        )
+        if btype != 0:
+            continue
         if not (txt or "").strip():
             continue
-        if b[5] != 0:  # not a text block
-            continue
-        # keep internal newlines from block as single spaces for later join
         cleaned = re.sub(r"\s*\n\s*", "", txt.strip())
         text_blocks.append((x0, y0, x1, y1, cleaned))
 
@@ -206,7 +199,12 @@ def _blocks_to_columns(page) -> str:
 
     left_cjk = sum(cjk_count(b[4]) for b in left)
     right_cjk = sum(cjk_count(b[4]) for b in right)
-    dual = left_cjk >= MIN_CJK_PAGE and right_cjk >= MIN_CJK_PAGE
+    # require both sides substantial AND roughly balanced (avoid title-centering FPs)
+    dual = (
+        left_cjk >= MIN_CJK_PAGE
+        and right_cjk >= MIN_CJK_PAGE
+        and min(left_cjk, right_cjk) / max(left_cjk, right_cjk) > 0.25
+    )
 
     if dual:
         left.sort(key=lambda b: (round(b[1], 1), b[0]))
@@ -219,7 +217,6 @@ def _blocks_to_columns(page) -> str:
 
 
 def extract_text_layer(pdf_path: Path) -> tuple[str | None, str]:
-    """Return (text, note). text is None if almost no CJK."""
     try:
         import fitz
     except ImportError:
@@ -244,8 +241,6 @@ def extract_text_layer(pdf_path: Path) -> tuple[str | None, str]:
         return None, f"text-layer-error:{e}"
 
 
-# ── OCR for scanned / image-only pages ──────────────────────────────────
-
 def _tesseract_available() -> bool:
     try:
         r = subprocess.run(
@@ -261,7 +256,6 @@ def _tesseract_available() -> bool:
 
 
 def _ocr_clip_tesseract(page, clip, dpi: int, tmpdir: Path) -> str:
-    """Render a clip region and OCR with tesseract chi_sim."""
     import fitz
 
     mat = fitz.Matrix(dpi / 72.0, dpi / 72.0)
@@ -276,7 +270,7 @@ def _ocr_clip_tesseract(page, clip, dpi: int, tmpdir: Path) -> str:
         "-l",
         OCR_LANG,
         "--psm",
-        "6",  # uniform block of text (one column)
+        "6",
         "-c",
         "preserve_interword_spaces=1",
     ]
@@ -288,7 +282,6 @@ def _ocr_clip_tesseract(page, clip, dpi: int, tmpdir: Path) -> str:
 
 
 def ocr_page_two_column(page, dpi: int = OCR_DPI) -> str:
-    """OCR left column then right column (gazette dual-column)."""
     import fitz
 
     w, h = float(page.rect.width), float(page.rect.height)
@@ -304,7 +297,6 @@ def ocr_page_two_column(page, dpi: int = OCR_DPI) -> str:
 
 
 def ocr_page_full(page, dpi: int = OCR_DPI) -> str:
-    """Full-page OCR via PyMuPDF textpage_ocr (fallback)."""
     try:
         tp = page.get_textpage_ocr(language=OCR_LANG, dpi=dpi, full=True)
         return (page.get_text("text", textpage=tp, sort=True) or "").strip()
@@ -364,7 +356,6 @@ def extract_with_markitdown(pdf_path: Path) -> tuple[str | None, str]:
 
 
 def extract_text(pdf_path: Path) -> tuple[str | None, str]:
-    """Try text-layer → OCR → markitdown. Returns (cleaned_text, engine)."""
     text, note = extract_text_layer(pdf_path)
     if text:
         print(f"  engine=text-layer ({note})")
