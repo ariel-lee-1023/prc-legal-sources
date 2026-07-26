@@ -4,6 +4,8 @@ Authoritative legal sources of the People's Republic of China, organised by **le
 
 Provides accurate grounding for legal AI agents.
 
+> **For AI agents:** start with [`AGENTS.md`](./AGENTS.md) — it tells you how to navigate `content/`, respect the effect hierarchy, and cite correctly.
+
 ## Effect hierarchy (top → bottom)
 
 | Folder | Chinese | Nature |
