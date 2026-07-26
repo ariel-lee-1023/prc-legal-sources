@@ -4,6 +4,9 @@ Incremental downloader for 国家法律法规数据库 (https://flk.npc.gov.cn).
 
 Public API — no login required.
 
+Current priority phase: fill 02_Statutes (法律) completely with small batches.
+After that we switch to light periodic updates.
+
 Maps:
   宪法          → incoming/01_Constitution/
   法律          → incoming/02_Statutes/
@@ -11,15 +14,11 @@ Maps:
   司法解释      → incoming/05_Judicial_Interpretations/
 
 Only downloads PDF (official gazette version). Skips already-seen ids via
-sources/flk-manifest.json. Newest-first, so weekly runs only touch the front
-pages and exit early on known ids.
+sources/flk-manifest.json.
 
-Usage (local first seed recommended):
-  python scripts/download_flk.py --types 宪法,法律 --max-pages 20
-  python scripts/download_flk.py --types 宪法,法律,行政法规,司法解释 --max-new 30
-
-After PDFs land in incoming/, the existing convert-incoming workflow (or the
-same job) turns them into Markdown under content/ and deletes the PDFs.
+Usage:
+  python scripts/download_flk.py --types 法律 --max-new 15 --max-pages 20
+  python scripts/download_flk.py --types 法律 --dry-run
 """
 
 from __future__ import annotations
@@ -43,13 +42,19 @@ LIST_URL = "https://flk.npc.gov.cn/api/"
 DETAIL_URL = "https://flk.npc.gov.cn/api/detail"
 DOWNLOAD_BASE = "https://wb.flk.npc.gov.cn"
 
-# Chinese type → target folder (effect hierarchy)
 TYPE_TO_FOLDER = {
     "宪法": "01_Constitution",
     "法律": "02_Statutes",
     "行政法规": "03_Administrative_Regulations",
     "司法解释": "05_Judicial_Interpretations",
-    # "地方性法规": "04_Local_Regulations",  # intentionally omitted — too large
+}
+
+# Known type codes used by the site (may vary; we try several strategies)
+TYPE_CODE_CANDIDATES = {
+    "法律": ["flfg", "fl", ""],
+    "宪法": ["xf", ""],
+    "行政法规": ["xzfg", ""],
+    "司法解释": ["sfjs", ""],
 }
 
 HEADERS = {
@@ -60,6 +65,7 @@ HEADERS = {
     ),
     "Accept": "application/json, text/plain, */*",
     "Referer": "https://flk.npc.gov.cn/",
+    "Origin": "https://flk.npc.gov.cn",
 }
 
 
@@ -87,24 +93,31 @@ def save_manifest(manifest: dict[str, Any]) -> None:
     )
 
 
-def fetch_list(page: int, size: int = 50) -> dict | None:
+def fetch_list(page: int, size: int = 30, type_code: str = "") -> dict | None:
     params = {
         "page": str(page),
         "size": str(size),
-        "type": "",  # empty = mixed, newest first under common sort
+        "type": type_code,
         "searchType": "title;vague",
         "sortTr": "f_bbrq_s;desc",
         "sort": "true",
         "_": str(int(time.time() * 1000)),
     }
     try:
-        r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=30)
-        r.raise_for_status()
-        data = r.json()
-        if not data.get("success", True) and data.get("code") != 200:
-            print(f"  list API error: {data}", file=sys.stderr)
+        r = requests.get(LIST_URL, params=params, headers=HEADERS, timeout=45)
+        print(f"  GET list page={page} type_code={type_code!r} status={r.status_code}")
+        if r.status_code != 200:
+            print(f"  body: {r.text[:400]}", file=sys.stderr)
             return None
-        return data.get("result") or data
+        data = r.json()
+        # Be tolerant of response shape
+        result = data.get("result") or data
+        if isinstance(result, dict) and "data" in result:
+            return result
+        if isinstance(data, dict) and "data" in data:
+            return data
+        print(f"  unexpected shape keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
+        return None
     except Exception as e:
         print(f"  list page={page} failed: {e}", file=sys.stderr)
         return None
@@ -112,21 +125,19 @@ def fetch_list(page: int, size: int = 50) -> dict | None:
 
 def fetch_detail(law_id: str) -> dict | None:
     try:
-        # Most crawlers use POST form data
         r = requests.post(
             DETAIL_URL,
             data={"id": law_id},
             headers=HEADERS,
-            timeout=30,
+            timeout=45,
         )
-        r.raise_for_status()
-        data = r.json()
-        if not data.get("success", True) and data.get("code") != 200:
-            print(f"  detail {law_id[:20]}... error: {data}", file=sys.stderr)
+        if r.status_code != 200:
+            print(f"  detail status={r.status_code} body={r.text[:300]}", file=sys.stderr)
             return None
+        data = r.json()
         return data.get("result") or data
     except Exception as e:
-        print(f"  detail {law_id[:20]}... failed: {e}", file=sys.stderr)
+        print(f"  detail failed: {e}", file=sys.stderr)
         return None
 
 
@@ -134,7 +145,6 @@ def pick_pdf_path(detail: dict) -> str | None:
     body = detail.get("body") or []
     if not isinstance(body, list):
         return None
-    # Prefer explicit PDF
     for item in body:
         if not isinstance(item, dict):
             continue
@@ -142,7 +152,6 @@ def pick_pdf_path(detail: dict) -> str | None:
         typ = (item.get("type") or "").upper()
         if typ == "PDF" or path.lower().endswith(".pdf"):
             return path
-    # Fallback: any path that looks like a file
     for item in body:
         if isinstance(item, dict):
             path = item.get("path") or ""
@@ -167,7 +176,7 @@ def download_pdf(url: str, dest: Path) -> bool:
             return False
         return True
     except Exception as e:
-        print(f"  download failed {url}: {e}", file=sys.stderr)
+        print(f"  download failed: {e}", file=sys.stderr)
         dest.unlink(missing_ok=True)
         return False
 
@@ -176,20 +185,20 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Download from flk.npc.gov.cn into incoming/")
     parser.add_argument(
         "--types",
-        default="宪法,法律",
-        help="Comma-separated Chinese types to accept (default: 宪法,法律)",
+        default="法律",
+        help="Comma-separated Chinese types (default: 法律)",
     )
-    parser.add_argument("--max-pages", type=int, default=30, help="Max list pages to scan")
-    parser.add_argument("--max-new", type=int, default=50, help="Stop after this many new downloads")
-    parser.add_argument("--size", type=int, default=50, help="Page size")
-    parser.add_argument("--dry-run", action="store_true", help="Only print what would be downloaded")
-    parser.add_argument("--sleep", type=float, default=1.2, help="Seconds between requests")
+    parser.add_argument("--max-pages", type=int, default=25, help="Max list pages to scan")
+    parser.add_argument("--max-new", type=int, default=15, help="Stop after this many new downloads")
+    parser.add_argument("--size", type=int, default=30, help="Page size")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--sleep", type=float, default=1.5)
     args = parser.parse_args()
 
     wanted = {t.strip() for t in args.types.split(",") if t.strip()}
     for t in wanted:
         if t not in TYPE_TO_FOLDER:
-            print(f"WARNING: type '{t}' has no folder mapping, will be skipped", file=sys.stderr)
+            print(f"WARNING: type '{t}' has no folder mapping", file=sys.stderr)
 
     manifest = load_manifest()
     seen: dict = manifest.setdefault("ids", {})
@@ -198,95 +207,133 @@ def main() -> int:
     print(f"Already in manifest: {len(seen)} ids")
     print(f"max-pages={args.max_pages}  max-new={args.max_new}  dry-run={args.dry_run}")
 
+    # Decide which type_code to try first (prefer the most specific)
+    primary_type = next(iter(wanted))
+    type_codes_to_try = TYPE_CODE_CANDIDATES.get(primary_type, [""])
+
     new_count = 0
     scanned = 0
-    page = 1
 
-    while page <= args.max_pages and new_count < args.max_new:
-        print(f"\n--- page {page} ---")
-        result = fetch_list(page, size=args.size)
-        if not result:
+    for type_code in type_codes_to_try:
+        if new_count >= args.max_new:
             break
+        print(f"\n=== trying type_code={type_code!r} for {primary_type} ===")
+        page = 1
+        consecutive_empty = 0
 
-        items = result.get("data") or []
-        if not items:
-            print("  empty page, stop")
-            break
-
-        for item in items:
-            scanned += 1
-            law_id = item.get("id") or ""
-            title = (item.get("title") or "").strip()
-            typ = (item.get("type") or "").strip()
-
-            if not law_id or typ not in wanted:
+        while page <= args.max_pages and new_count < args.max_new:
+            print(f"\n--- page {page} ---")
+            result = fetch_list(page, size=args.size, type_code=type_code)
+            if not result:
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    break
+                page += 1
+                time.sleep(args.sleep)
                 continue
 
-            if law_id in seen:
-                # Newest-first → once we hit a run of known ids we can stop early
-                # but keep scanning a little for safety
+            items = result.get("data") or []
+            if not items:
+                print("  empty page")
+                consecutive_empty += 1
+                if consecutive_empty >= 2:
+                    break
+                page += 1
+                time.sleep(args.sleep)
                 continue
 
-            folder = TYPE_TO_FOLDER.get(typ)
-            if not folder:
-                continue
+            consecutive_empty = 0
 
-            print(f"  NEW [{typ}] {title[:60]}")
+            # Debug: show what the API actually returned on first page of each strategy
+            if page == 1:
+                print("  sample items:")
+                for it in items[:5]:
+                    print(f"    type={it.get('type')!r}  title={str(it.get('title', ''))[:50]}")
 
-            if args.dry_run:
-                new_count += 1
-                continue
+            page_had_wanted = False
+            for item in items:
+                scanned += 1
+                law_id = item.get("id") or ""
+                title = (item.get("title") or "").strip()
+                typ = (item.get("type") or "").strip()
 
-            time.sleep(args.sleep)
-            detail = fetch_detail(law_id)
-            if not detail:
-                continue
+                # Accept either exact Chinese type or any item when we are using a type_code filter
+                if typ not in wanted and type_code == "":
+                    continue
+                if typ and typ not in wanted and type_code != "":
+                    # when using a code we still prefer matching Chinese type, but accept if empty
+                    if typ not in wanted:
+                        continue
 
-            rel_path = pick_pdf_path(detail)
-            if not rel_path:
-                print(f"    no PDF path, skip")
-                # still record so we don't retry forever
-                seen[law_id] = {
-                    "title": title,
-                    "type": typ,
-                    "status": "no-pdf",
-                    "at": datetime.now(timezone.utc).isoformat(),
-                }
-                continue
+                page_had_wanted = True
 
-            full_url = DOWNLOAD_BASE + rel_path if rel_path.startswith("/") else rel_path
-            fname = safe_name(title) + ".pdf"
-            dest = INCOMING_ROOT / folder / fname
+                if not law_id:
+                    continue
+                if law_id in seen:
+                    continue
 
-            time.sleep(args.sleep)
-            if download_pdf(full_url, dest):
-                print(f"    → {dest.relative_to(REPO_ROOT)}")
-                seen[law_id] = {
-                    "title": title,
-                    "type": typ,
-                    "file": str(dest.relative_to(REPO_ROOT)),
-                    "at": datetime.now(timezone.utc).isoformat(),
-                }
-                new_count += 1
-            else:
-                seen[law_id] = {
-                    "title": title,
-                    "type": typ,
-                    "status": "download-failed",
-                    "at": datetime.now(timezone.utc).isoformat(),
-                }
+                folder = TYPE_TO_FOLDER.get(typ) or TYPE_TO_FOLDER.get(primary_type)
+                if not folder:
+                    continue
 
-            if new_count >= args.max_new:
+                print(f"  NEW [{typ or primary_type}] {title[:60]}")
+
+                if args.dry_run:
+                    new_count += 1
+                    continue
+
+                time.sleep(args.sleep)
+                detail = fetch_detail(law_id)
+                if not detail:
+                    continue
+
+                rel_path = pick_pdf_path(detail)
+                if not rel_path:
+                    print("    no PDF path, skip")
+                    seen[law_id] = {
+                        "title": title,
+                        "type": typ or primary_type,
+                        "status": "no-pdf",
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    continue
+
+                full_url = DOWNLOAD_BASE + rel_path if rel_path.startswith("/") else rel_path
+                fname = safe_name(title) + ".pdf"
+                dest = INCOMING_ROOT / folder / fname
+
+                time.sleep(args.sleep)
+                if download_pdf(full_url, dest):
+                    print(f"    → {dest.relative_to(REPO_ROOT)}")
+                    seen[law_id] = {
+                        "title": title,
+                        "type": typ or primary_type,
+                        "file": str(dest.relative_to(REPO_ROOT)),
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    }
+                    new_count += 1
+                else:
+                    seen[law_id] = {
+                        "title": title,
+                        "type": typ or primary_type,
+                        "status": "download-failed",
+                        "at": datetime.now(timezone.utc).isoformat(),
+                    }
+
+                if new_count >= args.max_new:
+                    break
+
+            if not page_had_wanted and page > 3:
+                # this type_code is not giving us the wanted type
+                print("  no wanted types on this page → try next type_code")
                 break
 
-        # Early exit heuristic: if entire page was already known, stop
-        page_known = all((item.get("id") in seen) for item in items if item.get("type") in wanted)
-        if page_known and page > 1:
-            print("  page fully known → stop early")
-            break
+            page += 1
+            time.sleep(args.sleep)
 
-        page += 1
-        time.sleep(args.sleep)
+        if new_count > 0:
+            # We already got some files with this strategy, no need to try other codes
+            break
 
     if not args.dry_run:
         save_manifest(manifest)
