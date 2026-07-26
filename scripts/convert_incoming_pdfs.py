@@ -11,6 +11,7 @@ Post-process:
   - fullwidth → halfwidth digits/letters
   - strip 公报 running headers / page numbers
   - join soft line-wraps from justified Chinese typesetting
+  - emit blank lines between 第N条 / 章 so Markdown renders one article per paragraph
 
 After successful conversion the source PDF is deleted (keeps the repo light).
 """
@@ -73,6 +74,14 @@ _STRUCT_START = re.compile(
     r"|[一二三四五六七八九十]+、"
     r"|目\s*录)"
 )
+_TITLE_ONLY = re.compile(
+    r"^(中华人民共和国主席令"
+    r"|第[一二三四五六七八九十百零〇\d]+号"
+    r"|\d{4}年\d{1,2}月\d{1,2}日"
+    r"|中华人民共和国主席\s*[\u4e00-\u9fff]{2,4}"
+    r"|中华人民共和国[\u4e00-\u9fff·]{2,30}法"
+    r"|目\s*录)$"
+)
 _SENT_END = set("。！？；：”』」）】》…")
 _CJK_CHAR = re.compile(r"[\u4e00-\u9fff]")
 
@@ -92,16 +101,22 @@ def cjk_count(text: str) -> int:
 
 
 def join_soft_wraps(text: str) -> str:
-    """Re-join lines broken by PDF justified layout mid-sentence."""
+    """Join mid-sentence wraps; keep each 第N条 / 章 as its own Markdown paragraph.
+
+    Markdown collapses single newlines to spaces — so structural breaks MUST
+    emit a blank line (\n\n), otherwise the whole statute becomes one wall of text.
+    """
     lines = [ln.rstrip() for ln in text.split("\n")]
     out: list[str] = []
     buf = ""
 
-    def flush() -> None:
+    def flush(paragraph: bool = False) -> None:
         nonlocal buf
         if buf:
             out.append(buf)
             buf = ""
+            if paragraph:
+                out.append("")
 
     i = 0
     n = len(lines)
@@ -114,19 +129,16 @@ def join_soft_wraps(text: str) -> str:
                 j += 1
             if buf and j < n:
                 nxt = lines[j].strip()
-                # soft-join across blank when mid-sentence CJK run continues
+                # soft-join across blank when mid-sentence continues
                 if (
                     buf[-1] not in _SENT_END
                     and not _STRUCT_START.match(nxt)
                     and not _PAGE_NUM_RE.match(nxt)
-                    and _CJK_CHAR.search(buf[-1])
-                    and _CJK_CHAR.match(nxt[:1] or "")
+                    and not _TITLE_ONLY.match(buf)
                 ):
                     i += 1
                     continue
-            flush()
-            if out and out[-1] != "":
-                out.append("")
+            flush(paragraph=True)
             i += 1
             continue
 
@@ -135,7 +147,7 @@ def join_soft_wraps(text: str) -> str:
             continue
 
         if _STRUCT_START.match(stripped):
-            flush()
+            flush(paragraph=True)
             buf = stripped
             i += 1
             continue
@@ -146,26 +158,38 @@ def join_soft_wraps(text: str) -> str:
             continue
 
         if buf[-1] in _SENT_END:
-            flush()
+            flush(paragraph=True)
             buf = stripped
             i += 1
             continue
 
-        # short non-sentence buffer that does not end with CJK → title, don't glue
+        if _TITLE_ONLY.match(buf):
+            flush(paragraph=True)
+            buf = stripped
+            i += 1
+            continue
+
+        # short standalone line (e.g. signature) before a title/date
         if (
-            len(buf) <= 18
-            and not any(c in buf for c in "。；，")
-            and not _CJK_CHAR.search(buf[-1])
+            len(buf) <= 25
+            and not any(c in buf for c in "。；，、")
+            and (
+                _TITLE_ONLY.match(stripped)
+                or stripped.startswith("《")
+                or stripped.startswith("中华人民共和国")
+                or re.match(r"^\d{4}年", stripped)
+            )
         ):
-            flush()
+            flush(paragraph=True)
             buf = stripped
             i += 1
             continue
 
+        # mid-sentence soft wrap → join
         buf = buf + stripped
         i += 1
 
-    flush()
+    flush(paragraph=False)
     result = re.sub(r"\n{3,}", "\n\n", "\n".join(out))
     return result.strip()
 
@@ -181,9 +205,6 @@ def cleanup_text(text: str) -> str:
 
 def _blocks_to_columns(page) -> str:
     """Extract blocks with 公报 dual-column reading order.
-
-    PyMuPDF blocks: (x0, y0, x1, y1, text, block_no, block_type)
-    block_type 0 = text.
 
     Gazette layout: full-width headers first, then entire left column
     top→bottom, then entire right column top→bottom.
@@ -238,7 +259,6 @@ def _blocks_to_columns(page) -> str:
     if not dual:
         return "\n".join(b[4] for b in sorted(items, key=key))
 
-    # dual_top: earliest y where left & right column body coexist nearby
     dual_top = None
     for lb in body_left:
         for rb in body_right:
