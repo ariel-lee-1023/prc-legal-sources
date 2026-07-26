@@ -12,10 +12,18 @@ Directory mapping (strict, effect hierarchy):
       → content/03_Administrative_Regulations/<name>.md
   incoming/04_Local_Regulations/*.pdf
       → content/04_Local_Regulations/<name>.md
-  incoming/05_Judicial_Interpretations/*.pdf
-      → content/05_Judicial_Interpretations/<name>.md
-  incoming/06_Authoritative_Cases/*.pdf
-      → content/06_Authoritative_Cases/<name>.md
+  incoming/05_Rules/*.pdf
+      → content/05_Rules/<name>.md
+  incoming/06_Judicial_Interpretations/*.pdf
+      → content/06_Judicial_Interpretations/<name>.md
+  incoming/07_Authoritative_Cases/*.pdf
+      → content/07_Authoritative_Cases/<name>.md
+  incoming/08_Judicial_Guidance_Documents/*.pdf
+      → content/08_Judicial_Guidance_Documents/<name>.md
+  incoming/09_Local_Judicial_Guidance/*.pdf
+      → content/09_Local_Judicial_Guidance/<name>.md
+  incoming/10_Other_Authoritative_Materials/*.pdf
+      → content/10_Other_Authoritative_Materials/<name>.md
 
 After successful conversion the source PDF is deleted (keeps the repo light).
 """
@@ -38,8 +46,12 @@ SUBFOLDERS = [
     "02_Statutes",                        # 法律 — NPC / NPCSC
     "03_Administrative_Regulations",      # 行政法规 — State Council
     "04_Local_Regulations",               # 地方性法规
-    "05_Judicial_Interpretations",        # 司法解释 — distinct effect-tier
-    "06_Authoritative_Cases",             # 指导性案例 / 权威案例 — interpretive
+    "05_Rules",                           # 规章 — department / local government rules
+    "06_Judicial_Interpretations",        # 司法解释 — distinct effect-tier
+    "07_Authoritative_Cases",             # 指导性案例 / 权威案例 — interpretive
+    "08_Judicial_Guidance_Documents",     # 司法指导性文件
+    "09_Local_Judicial_Guidance",         # 地方司法指导文件
+    "10_Other_Authoritative_Materials",   # 其他权威材料
 ]
 
 
