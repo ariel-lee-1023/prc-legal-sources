@@ -24,11 +24,21 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install converters
+      - name: Install system OCR (Chinese)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            tesseract-ocr \
+            tesseract-ocr-chi-sim \
+            tesseract-ocr-eng
+          tesseract --list-langs
+          echo "tesseract version: $(tesseract --version | head -1)"
+
+      - name: Install Python converters
         run: |
           python -m pip install --upgrade pip
-          # pymupdf = primary (better Chinese / multi-column)
-          # markitdown = fallback
+          # pymupdf = primary text-layer + render for OCR
+          # markitdown = last-resort fallback
           pip install pymupdf "markitdown[pdf]"
 
       - name: Convert PDFs → Markdown
