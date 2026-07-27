@@ -1,0 +1,40 @@
+name: Normalize content formatting
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  normalize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Run normalizer
+        run: |
+          python scripts/normalize_content.py --write
+
+      - name: Commit & push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add content/ || true
+
+          if git diff --staged --quiet; then
+            echo "No formatting changes"
+          else
+            git commit -m "chore: normalize conversion artifacts in content/ (glyphs + brackets)"
+            git pull --rebase origin main
+            git push
+          fi
