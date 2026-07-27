@@ -12,6 +12,8 @@ Post-process:
   - strip 公报 running headers / page numbers
   - join soft line-wraps from justified Chinese typesetting
   - emit blank lines between 第N条 / 章 so Markdown renders one article per paragraph
+  - normalize conversion artifacts (private-use glyphs, non-standard brackets)
+    so every new file landing in content/ is already clean
 
 After successful conversion the source PDF is deleted (keeps the repo light).
 """
@@ -58,8 +60,29 @@ _FW_TRANS = str.maketrans(
     }
 )
 
+# Private-use glyph that appears in some 公报 text-layer extractions
+# (U+100170 stands in for 年). Mapped early so later header regexes see clean text.
+_GLYPH_MAP = str.maketrans({
+    "\U00100170": "\u5e74",  # ခ70 → 年
+})
+
+# Non-standard title brackets that some PDF fonts emit
+_BRACKET_MAP = str.maketrans({
+    "\u2039": "\u3008",  # ‹ → 〈
+    "\u203a": "\u3009",  # › → 〉
+    "\u00ab": "\u300a",  # « → 《
+    "\u00bb": "\u300b",  # » → 》
+})
+
+_ARTIFACT_MAP = str.maketrans({**_GLYPH_MAP, **_BRACKET_MAP})
+
+# Residual mid-paragraph running-header fragments after glyph mapping
+_HEADER_FRAG = re.compile(
+    r"全国人民代表大会常务委员会公报\d{4}年\d+"
+)
+
 _HEADER_RE = re.compile(
-    r"^\s*全国人民代表大会常务委员会公报[\d０-９·\.\s]+\s*$",
+    r"^\s*全国人民代表大会常务委员会公报[\d０-９·\.\s\U00100170]+\s*$",
     re.MULTILINE,
 )
 _PAGE_NUM_RE = re.compile(
@@ -194,11 +217,27 @@ def join_soft_wraps(text: str) -> str:
     return result.strip()
 
 
+def normalize_artifacts(text: str) -> str:
+    """Map private-use glyphs + non-standard brackets; strip residual headers.
+
+    Called on every newly written content/ file so the authoritative text
+    stays clean without a separate pass.
+    """
+    text = text.translate(_ARTIFACT_MAP)
+    text = _HEADER_FRAG.sub("", text)
+    text = re.sub(r" {2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
+
+
 def cleanup_text(text: str) -> str:
     text = text.translate(_FW_TRANS)
+    # Map PUA early so the header regex can see ordinary digits/年
+    text = text.translate(_GLYPH_MAP)
     text = _HEADER_RE.sub("", text)
     text = _PAGE_NUM_RE.sub("", text)
     text = join_soft_wraps(text)
+    text = normalize_artifacts(text)  # brackets + residual header fragments
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 

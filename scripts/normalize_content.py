@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-One-time normalization of conversion artifacts in content/.
+Normalize conversion artifacts already present under content/.
 
-- Map stray private-use glyphs (U+100170 → 年) that appear as residual
-  running headers from certain 公报 PDFs.
-- Normalize non-standard title brackets:
-    ‹ → 〈   › → 〉
-    « → 《   » → 》
-- After mapping, strip residual mid-paragraph running-header fragments
-  of the form "全国人民代表大会常务委员会公报YYYY年N".
+Primary path: the same logic now runs automatically inside
+convert_incoming_pdfs.py on every new file written to content/.
+This script remains for:
+  - one-shot cleanup of files that already exist
+  - manual / ad-hoc runs
 
-This closes the small accuracy gap in the authoritative texts that an
-IP-aware reader would notice first (esp. 著作权法 header).
+What it does:
+  - Map private-use glyph U+100170 → 年
+  - Normalize non-standard brackets: ‹› → 〈〉, «» → 《》
+  - Strip residual mid-paragraph 公报 running-header fragments
 
 Usage:
   python scripts/normalize_content.py          # dry-run report
@@ -26,33 +26,27 @@ from pathlib import Path
 
 CONTENT_ROOT = Path("content")
 
-# Private-use / conversion artifacts observed in the 公报 text-layer
-# (U+100170 is the stand-in for 年 in "2021ခ701" headers).
-GLYPH_MAP = str.maketrans({
+_GLYPH_MAP = str.maketrans({
     "\U00100170": "\u5e74",  # ခ70 → 年
 })
 
-BRACKET_MAP = str.maketrans({
+_BRACKET_MAP = str.maketrans({
     "\u2039": "\u3008",  # ‹ → 〈
     "\u203a": "\u3009",  # › → 〉
     "\u00ab": "\u300a",  # « → 《
     "\u00bb": "\u300b",  # » → 》
 })
 
-FULL_MAP = str.maketrans({**GLYPH_MAP, **BRACKET_MAP})
+_ARTIFACT_MAP = str.maketrans({**_GLYPH_MAP, **_BRACKET_MAP})
 
-# After glyph map, residual headers look like this (may be glued to text).
-HEADER_FRAG = re.compile(
+_HEADER_FRAG = re.compile(
     r"全国人民代表大会常务委员会公报\d{4}年\d+"
 )
 
 
 def normalize(text: str) -> str:
-    text = text.translate(FULL_MAP)
-    # Remove residual running-header fragments that survived the original
-    # conversion (they were invisible to the old regex because of the PUA glyph).
-    text = HEADER_FRAG.sub("", text)
-    # Collapse any double spaces or awkward joins created by the strip
+    text = text.translate(_ARTIFACT_MAP)
+    text = _HEADER_FRAG.sub("", text)
     text = re.sub(r" {2,}", " ", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text
