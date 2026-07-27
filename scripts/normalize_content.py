@@ -2,11 +2,13 @@
 """
 One-time normalization of conversion artifacts in content/.
 
-- Map stray private-use glyphs (e.g. U+100170 → 年) that appear as
-  residual running headers from certain 公报 PDFs.
+- Map stray private-use glyphs (U+100170 → 年) that appear as residual
+  running headers from certain 公报 PDFs.
 - Normalize non-standard title brackets:
     ‹ → 〈   › → 〉
     « → 《   » → 》
+- After mapping, strip residual mid-paragraph running-header fragments
+  of the form "全国人民代表大会常务委员会公报YYYY年N".
 
 This closes the small accuracy gap in the authoritative texts that an
 IP-aware reader would notice first (esp. 著作权法 header).
@@ -25,9 +27,9 @@ from pathlib import Path
 CONTENT_ROOT = Path("content")
 
 # Private-use / conversion artifacts observed in the 公报 text-layer
-# (U+100170 appears as the stand-in for 年 in "2021ခ701" headers).
+# (U+100170 is the stand-in for 年 in "2021ခ701" headers).
 GLYPH_MAP = str.maketrans({
-    "\U00100170": "\u5e74",  # 􀅰 → 年
+    "\U00100170": "\u5e74",  # ခ70 → 年
 })
 
 BRACKET_MAP = str.maketrans({
@@ -37,12 +39,23 @@ BRACKET_MAP = str.maketrans({
     "\u00bb": "\u300b",  # » → 》
 })
 
-# Combined for a single pass
 FULL_MAP = str.maketrans({**GLYPH_MAP, **BRACKET_MAP})
+
+# After glyph map, residual headers look like this (may be glued to text).
+HEADER_FRAG = re.compile(
+    r"全国人民代表大会常务委员会公报\d{4}年\d+"
+)
 
 
 def normalize(text: str) -> str:
-    return text.translate(FULL_MAP)
+    text = text.translate(FULL_MAP)
+    # Remove residual running-header fragments that survived the original
+    # conversion (they were invisible to the old regex because of the PUA glyph).
+    text = HEADER_FRAG.sub("", text)
+    # Collapse any double spaces or awkward joins created by the strip
+    text = re.sub(r" {2,}", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text
 
 
 def main() -> int:
@@ -59,17 +72,15 @@ def main() -> int:
         if fixed == raw:
             continue
 
-        # Count what changed for the report
-        n = sum(1 for a, b in zip(raw, fixed) if a != b)
-        # Also catch multi-char if any, but translate is 1:1
-        print(f"{path.relative_to(CONTENT_ROOT)}  (~{n} codepoints)")
+        n = sum(1 for a, b in zip(raw, fixed) if a != b) + abs(len(fixed) - len(raw))
+        print(f"{path.relative_to(CONTENT_ROOT)}  (~{n} changes)")
         changed_files += 1
         total_repl += n
 
         if args.write:
             path.write_text(fixed, encoding="utf-8")
 
-    print(f"\n{'Wrote' if args.write else 'Would write'} {changed_files} file(s), ~{total_repl} codepoint replacements")
+    print(f"\n{'Wrote' if args.write else 'Would write'} {changed_files} file(s), ~{total_repl} changes")
     if not args.write and changed_files:
         print("Re-run with --write to apply.")
     return 0
