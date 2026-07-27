@@ -9,7 +9,7 @@ Use it for accurate grounding when answering questions about Chinese law.
 |------|------|
 | `content/` | **Authoritative text.** All converted Markdown lives here. Read only from here when grounding answers. |
 | `incoming/` | Temporary drop zone for PDFs. Empty after conversion. Ignore for reasoning. |
-| `sources/` | Auxiliary notes (e.g. biji). Secondary; do not treat as primary law. |
+| `sources/` | Auxiliary notes. Secondary; do not treat as primary law. |
 
 Never invent articles. If the needed text is not under `content/`, say so.
 
